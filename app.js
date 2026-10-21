@@ -1,8 +1,8 @@
 "use strict";
 
 const KEY = "subir-github.v1";
-const REPO_LIMIT = 25 * 1024 * 1024; // más que esto va al release
-const DEFAULTS = { user: "", repo: "", branch: "main", folder: "", tag: "media", token: "" };
+const MAX_FILE = 50 * 1024 * 1024; // límite por archivo (la base64 pesa ~33 % más en memoria)
+const DEFAULTS = { user: "", repo: "", branch: "main", folder: "", token: "" };
 
 /* ---------- utilidades puras (se prueban con node) ---------- */
 
@@ -29,6 +29,7 @@ function categoryOf(file) {
   const n = file.name || "";
   if (t.startsWith("video/") || /\.(mp4|mov|m4v|avi|mkv|webm)$/i.test(n)) return "videos";
   if (t.startsWith("image/") || /\.(jpe?g|png|heic|heif|gif|webp|bmp|tiff?)$/i.test(n)) return "fotos";
+  if (t.startsWith("audio/") || /\.(m4a|mp3|wav|aac|ogg|flac|opus)$/i.test(n)) return "audios";
   return "documentos";
 }
 
@@ -40,9 +41,8 @@ function repoDir(base, file, d = new Date()) {
   return [base, categoryOf(file), monthFolder(d)].filter(Boolean).join("/");
 }
 
-function goesToRelease(file) {
-  const isVideo = (file.type || "").startsWith("video/") || /\.(mp4|mov|m4v|avi|mkv|webm)$/i.test(file.name || "");
-  return isVideo || file.size > REPO_LIMIT;
+function tooBig(file) {
+  return file.size > MAX_FILE;
 }
 
 function repoPath(folder, name) {
@@ -95,55 +95,27 @@ function toBase64(file) {
   });
 }
 
+// Sube un archivo con la API de contenidos (PUT). Usa XHR para tener barra de progreso
+// y arma el cuerpo como Blob para no duplicar en memoria la cadena base64.
 async function putToRepo(cfg, file, name, dir, onProgress) {
-  onProgress(0.1);
-  const content = await toBase64(file);
-  onProgress(0.4);
-  const body = { message: "Subir " + name, content };
-  if (cfg.branch) body.branch = cfg.branch;
-  const r = await gh(cfg, `/repos/${encodeURIComponent(cfg.user)}/${encodeURIComponent(cfg.repo)}/contents/${repoPath(dir, name)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error(await errText(r));
-  const j = await r.json();
-  onProgress(1);
-  return j.content && j.content.html_url ? j.content.html_url : "";
-}
-
-let releaseCache = null;
-
-async function getRelease(cfg) {
-  const key = `${cfg.user}/${cfg.repo}#${cfg.tag}`;
-  if (releaseCache && releaseCache.key === key) return releaseCache.rel;
-  const base = `/repos/${encodeURIComponent(cfg.user)}/${encodeURIComponent(cfg.repo)}/releases`;
-  let r = await gh(cfg, `${base}/tags/${encodeURIComponent(cfg.tag)}`);
-  if (r.status === 404) {
-    r = await gh(cfg, base, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tag_name: cfg.tag, name: cfg.tag, body: "Archivos subidos desde la app.", draft: false, prerelease: false }),
-    });
-  }
-  if (!r.ok) throw new Error(await errText(r));
-  const rel = await r.json();
-  releaseCache = { key, rel };
-  return rel;
-}
-
-function uploadAsset(cfg, rel, file, name, onProgress) {
+  onProgress(0.05);
+  const b64 = await toBase64(file);
+  onProgress(0.3);
+  const head = JSON.stringify({ message: "Subir " + name, ...(cfg.branch ? { branch: cfg.branch } : {}) });
+  const body = new Blob([head.slice(0, -1), ',"content":"', b64, '"}'], { type: "application/json" });
+  const url = `https://api.github.com/repos/${encodeURIComponent(cfg.user)}/${encodeURIComponent(cfg.repo)}/contents/${repoPath(dir, name)}`;
   return new Promise((resolve, reject) => {
-    const base = String(rel.upload_url).replace(/\{.*$/, "");
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${base}?name=${encodeURIComponent(name)}`);
+    xhr.open("PUT", url);
     xhr.setRequestHeader("Authorization", "Bearer " + cfg.token);
     xhr.setRequestHeader("Accept", "application/vnd.github+json");
-    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
-    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.setRequestHeader("X-GitHub-Api-Version", "2022-11-28");
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(0.3 + 0.7 * (e.loaded / e.total)); };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        try { resolve(JSON.parse(xhr.responseText).browser_download_url || ""); } catch { resolve(""); }
+        onProgress(1);
+        try { resolve(JSON.parse(xhr.responseText).content.html_url || ""); } catch { resolve(""); }
       } else {
         let m = String(xhr.status);
         try { m += ": " + JSON.parse(xhr.responseText).message; } catch {}
@@ -151,7 +123,7 @@ function uploadAsset(cfg, rel, file, name, onProgress) {
       }
     };
     xhr.onerror = () => reject(new Error("Error de red al subir"));
-    xhr.send(file);
+    xhr.send(body);
   });
 }
 
@@ -159,8 +131,8 @@ function uploadAsset(cfg, rel, file, name, onProgress) {
 
 if (typeof document !== "undefined") {
   const $ = (s) => document.querySelector(s);
-  const ids = ["user", "repo", "branch", "folder", "tag", "token"];
-  let items = []; // { file, name, thumb, state, el }
+  const ids = ["user", "repo", "branch", "folder", "token"];
+  let items = []; // { file, thumb, state, progress, status, cls, link, fillEl }
   let busy = false;
 
   function loadCfg() {
@@ -177,27 +149,32 @@ if (typeof document !== "undefined") {
   function say(text, kind) { const m = $("#msg"); m.textContent = text; m.className = kind || ""; }
   function needsConfig(c) { return !c.user || !c.repo || !c.token; }
 
+  function icon(file) {
+    const c = categoryOf(file);
+    return c === "videos" ? "🎬" : c === "audios" ? "🎵" : "📄";
+  }
+
   function render() {
     const ul = $("#list");
     ul.textContent = "";
+    const base = readForm().folder;
     items.forEach((it) => {
       const li = document.createElement("li");
       li.className = "item";
       const th = document.createElement("div");
       th.className = "thumb";
-      if (it.file.type.startsWith("image/")) {
+      if (categoryOf(it.file) === "fotos" && it.file.type.startsWith("image/")) {
         const img = document.createElement("img");
         it.thumb = it.thumb || URL.createObjectURL(it.file);
         img.src = it.thumb; img.alt = "";
         th.appendChild(img);
       } else {
-        th.textContent = it.file.type.startsWith("video/") ? "🎬" : "📄";
+        th.textContent = icon(it.file);
       }
       const info = document.createElement("div");
       const nm = document.createElement("div"); nm.className = "name"; nm.textContent = it.file.name;
       const mt = document.createElement("div"); mt.className = "meta";
-      const dest = goesToRelease(it.file) ? "Release (" + categoryOf(it.file) + ")" : repoDir(readForm().folder, it.file);
-      mt.textContent = `${fmtSize(it.file.size)} · ${dest}`;
+      mt.textContent = `${fmtSize(it.file.size)} · ${repoDir(base, it.file)}`;
       const bar = document.createElement("div"); bar.className = "bar";
       const fill = document.createElement("i"); fill.style.width = (it.progress || 0) * 100 + "%";
       bar.appendChild(fill);
@@ -208,7 +185,8 @@ if (typeof document !== "undefined") {
         a.textContent = it.status || "Subido";
         st.appendChild(a);
       } else {
-        st.textContent = it.status || "";
+        st.textContent = it.status || (tooBig(it.file) ? "Supera el límite de " + fmtSize(MAX_FILE) : "");
+        if (tooBig(it.file)) st.className = "status err";
       }
       info.append(nm, mt, bar, st);
       li.append(th, info);
@@ -216,7 +194,7 @@ if (typeof document !== "undefined") {
       it.fillEl = fill;
     });
     $("#actions").classList.toggle("hidden", items.length === 0);
-    $("#uploadBtn").disabled = busy || !items.some((i) => i.state !== "ok");
+    $("#uploadBtn").disabled = busy || !items.some((i) => i.state !== "ok" && !tooBig(i.file));
     $("#clearBtn").disabled = busy;
   }
 
@@ -236,19 +214,13 @@ if (typeof document !== "undefined") {
     busy = true; render();
     let n = 0;
     for (const it of items) {
-      if (it.state === "ok") continue;
+      if (it.state === "ok" || tooBig(it.file)) continue;
       n += 1;
       it.state = "up"; it.status = "Subiendo…"; it.cls = ""; setProgress(it, 0.02);
       render();
       const name = uniqueName(it.file.name, n - 1);
       try {
-        if (goesToRelease(it.file)) {
-          const rel = await getRelease(cfg);
-          const assetName = categoryOf(it.file) + "-" + name;
-          it.link = await uploadAsset(cfg, rel, it.file, assetName, (p) => setProgress(it, p));
-        } else {
-          it.link = await putToRepo(cfg, it.file, name, repoDir(cfg.folder, it.file), (p) => setProgress(it, p));
-        }
+        it.link = await putToRepo(cfg, it.file, name, repoDir(cfg.folder, it.file), (p) => setProgress(it, p));
         it.state = "ok"; it.status = "Subido ✓"; it.cls = "ok"; setProgress(it, 1);
       } catch (e) {
         it.state = "err"; it.status = "Falló: " + (e && e.message ? e.message : e); it.cls = "err"; setProgress(it, 0);
@@ -285,9 +257,9 @@ if (typeof document !== "undefined") {
     items = []; render();
   });
   $("#saveBtn").addEventListener("click", () => {
-    const c = readForm();
-    saveCfg(c);
+    saveCfg(readForm());
     say("Configuración guardada.", "ok");
+    render();
   });
   $("#testBtn").addEventListener("click", testConn);
 
@@ -305,5 +277,5 @@ if (typeof document !== "undefined") {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { stamp, safeName, uniqueName, goesToRelease, repoPath, fmtSize, categoryOf, monthFolder, repoDir, REPO_LIMIT };
+  module.exports = { stamp, safeName, uniqueName, categoryOf, monthFolder, repoDir, repoPath, tooBig, fmtSize, MAX_FILE };
 }

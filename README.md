@@ -16,15 +16,18 @@ No tiene servidor ni dependencias: son archivos estáticos.
 - **Usuario / Repositorio**: el repositorio PRIVADO donde guardarás tus archivos (distinto del que aloja la app).
 - **Rama**: normalmente `main`.
 - **Carpeta base (opcional)**: si la dejas vacía, las carpetas se crean en la raíz del repositorio.
-- **Etiqueta del release**: para videos y archivos grandes (por defecto `media`). Si no existe, la app la crea.
 - **Token**: fine-grained, limitado a ese único repositorio, con permiso **Contents: Read and write**.
 
 Usa "Probar conexión" para comprobar que el token funciona y tiene permiso de escritura.
 
 ## Cómo decide dónde sube
 
-- Fotos y documentos de hasta 25 MB: se guardan en el repositorio, ordenados por tipo y mes, con un commit por archivo. Ejemplo: `fotos/2026-10/20261021-163005-1abc-playa.jpg` y `documentos/2026-10/...`.
-- Videos y cualquier archivo de más de 25 MB: adjunto del release (hasta 2 GB por archivo). Los adjuntos no admiten carpetas, así que el tipo va al inicio del nombre: `videos-20261021-...mov`.
+Todo se guarda en el repositorio, ordenado por tipo y mes, con un commit por archivo:
+`fotos/2026-10/…`, `videos/2026-10/…`, `audios/2026-10/…` y `documentos/2026-10/…`.
+
+Límite: 50 MB por archivo. Los archivos más pesados se marcan en la lista y no se suben.
+(Las subidas por el sistema de Releases de GitHub no funcionan desde el navegador, por eso no se usan.)
+Un repositorio con muchos videos crece rápido; GitHub recomienda mantenerlo por debajo de 1 GB.
 
 Cada archivo se renombra con fecha y hora para evitar choques de nombre.
 
