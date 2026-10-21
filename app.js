@@ -2,7 +2,7 @@
 
 const KEY = "subir-github.v1";
 const REPO_LIMIT = 25 * 1024 * 1024; // más que esto va al release
-const DEFAULTS = { user: "", repo: "", branch: "main", folder: "subidas", tag: "media", token: "" };
+const DEFAULTS = { user: "", repo: "", branch: "main", folder: "", tag: "media", token: "" };
 
 /* ---------- utilidades puras (se prueban con node) ---------- */
 
@@ -22,6 +22,22 @@ function safeName(name) {
 
 function uniqueName(fileName, index, d = new Date(), rand = Math.random().toString(36).slice(2, 5)) {
   return `${stamp(d)}-${index + 1}${rand}-${safeName(fileName)}`;
+}
+
+function categoryOf(file) {
+  const t = file.type || "";
+  const n = file.name || "";
+  if (t.startsWith("video/") || /\.(mp4|mov|m4v|avi|mkv|webm)$/i.test(n)) return "videos";
+  if (t.startsWith("image/") || /\.(jpe?g|png|heic|heif|gif|webp|bmp|tiff?)$/i.test(n)) return "fotos";
+  return "documentos";
+}
+
+function monthFolder(d = new Date()) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+}
+
+function repoDir(base, file, d = new Date()) {
+  return [base, categoryOf(file), monthFolder(d)].filter(Boolean).join("/");
 }
 
 function goesToRelease(file) {
@@ -79,13 +95,13 @@ function toBase64(file) {
   });
 }
 
-async function putToRepo(cfg, file, name, onProgress) {
+async function putToRepo(cfg, file, name, dir, onProgress) {
   onProgress(0.1);
   const content = await toBase64(file);
   onProgress(0.4);
   const body = { message: "Subir " + name, content };
   if (cfg.branch) body.branch = cfg.branch;
-  const r = await gh(cfg, `/repos/${encodeURIComponent(cfg.user)}/${encodeURIComponent(cfg.repo)}/contents/${repoPath(cfg.folder, name)}`, {
+  const r = await gh(cfg, `/repos/${encodeURIComponent(cfg.user)}/${encodeURIComponent(cfg.repo)}/contents/${repoPath(dir, name)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -180,7 +196,8 @@ if (typeof document !== "undefined") {
       const info = document.createElement("div");
       const nm = document.createElement("div"); nm.className = "name"; nm.textContent = it.file.name;
       const mt = document.createElement("div"); mt.className = "meta";
-      mt.textContent = `${fmtSize(it.file.size)} · ${goesToRelease(it.file) ? "Release" : "Repositorio"}`;
+      const dest = goesToRelease(it.file) ? "Release (" + categoryOf(it.file) + ")" : repoDir(readForm().folder, it.file);
+      mt.textContent = `${fmtSize(it.file.size)} · ${dest}`;
       const bar = document.createElement("div"); bar.className = "bar";
       const fill = document.createElement("i"); fill.style.width = (it.progress || 0) * 100 + "%";
       bar.appendChild(fill);
@@ -227,9 +244,10 @@ if (typeof document !== "undefined") {
       try {
         if (goesToRelease(it.file)) {
           const rel = await getRelease(cfg);
-          it.link = await uploadAsset(cfg, rel, it.file, name, (p) => setProgress(it, p));
+          const assetName = categoryOf(it.file) + "-" + name;
+          it.link = await uploadAsset(cfg, rel, it.file, assetName, (p) => setProgress(it, p));
         } else {
-          it.link = await putToRepo(cfg, it.file, name, (p) => setProgress(it, p));
+          it.link = await putToRepo(cfg, it.file, name, repoDir(cfg.folder, it.file), (p) => setProgress(it, p));
         }
         it.state = "ok"; it.status = "Subido ✓"; it.cls = "ok"; setProgress(it, 1);
       } catch (e) {
@@ -287,5 +305,5 @@ if (typeof document !== "undefined") {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { stamp, safeName, uniqueName, goesToRelease, repoPath, fmtSize, REPO_LIMIT };
+  module.exports = { stamp, safeName, uniqueName, goesToRelease, repoPath, fmtSize, categoryOf, monthFolder, repoDir, REPO_LIMIT };
 }
