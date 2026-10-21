@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Subir a GitHub</title>
+<meta name="theme-color" content="#0f172a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Subir">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" type="image/png" href="./icon-192.png">
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #0f172a; --muted: #64748b;
+    --line: #e2e8f0; --accent: #2563eb; --accent-text: #ffffff;
+    --ok: #15803d; --err: #b91c1c; --track: #e2e8f0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1020; --card: #151c30; --text: #e6e9f2; --muted: #94a3b8;
+      --line: #263049; --accent: #60a5fa; --accent-text: #0b1020;
+      --ok: #4ade80; --err: #f87171; --track: #263049;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 20px 16px calc(40px + env(safe-area-inset-bottom)); }
+  h1 { font-size: 1.4rem; margin: 8px 0 2px; }
+  .sub { color: var(--muted); margin: 0 0 18px; font-size: .95rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 14px; }
+  details > summary { cursor: pointer; font-weight: 600; list-style: none; display: flex; justify-content: space-between; align-items: center; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary::after { content: "▾"; color: var(--muted); }
+  details[open] > summary::after { content: "▴"; }
+  label { display: block; font-size: .85rem; color: var(--muted); margin: 12px 0 4px; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 11px 12px; font-size: 16px; color: var(--text);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+  }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  button {
+    font: inherit; font-weight: 600; border: 0; border-radius: 12px; padding: 13px 16px;
+    background: var(--accent); color: var(--accent-text); width: 100%; cursor: pointer;
+  }
+  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  .btns { display: grid; gap: 10px; margin-top: 14px; }
+  .btns.two { grid-template-columns: 1fr 1fr; }
+  #picker { display: none; }
+  .drop { text-align: center; padding: 22px 12px; border: 2px dashed var(--line); border-radius: 14px; }
+  .drop p { margin: 0 0 12px; color: var(--muted); }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li.item { display: grid; grid-template-columns: 52px 1fr; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+  li.item:first-child { border-top: 0; }
+  .thumb { width: 52px; height: 52px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line);
+    display: grid; place-items: center; font-size: 1.4rem; overflow: hidden; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .name { font-size: .95rem; word-break: break-all; }
+  .meta { color: var(--muted); font-size: .8rem; margin-top: 2px; }
+  .bar { height: 6px; background: var(--track); border-radius: 99px; margin-top: 8px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+  .status { font-size: .85rem; margin-top: 6px; }
+  .status.ok { color: var(--ok); } .status.err { color: var(--err); }
+  .status a { color: inherit; }
+  .note { font-size: .8rem; color: var(--muted); margin-top: 10px; }
+  #msg { font-size: .9rem; margin-top: 10px; min-height: 1.2em; }
+  #msg.ok { color: var(--ok); } #msg.err { color: var(--err); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Subir a GitHub</h1>
+  <p class="sub">Fotos, videos y documentos desde tu celular.</p>
+
+  <section class="card">
+    <details id="settings">
+      <summary>Configuración</summary>
+      <div class="row">
+        <div><label for="user">Usuario de GitHub</label><input id="user" type="text" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
+        <div><label for="repo">Repositorio</label><input id="repo" type="text" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
+      </div>
+      <div class="row">
+        <div><label for="branch">Rama</label><input id="branch" type="text" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="main"></div>
+        <div><label for="folder">Carpeta</label><input id="folder" type="text" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="subidas"></div>
+      </div>
+      <label for="tag">Etiqueta del release (videos y archivos grandes)</label>
+      <input id="tag" type="text" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="media">
+      <label for="token">Token personal (fine-grained)</label>
+      <input id="token" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
+      <div class="btns two">
+        <button id="saveBtn" type="button">Guardar</button>
+        <button id="testBtn" type="button" class="secondary">Probar conexión</button>
+      </div>
+      <div id="msg" role="status"></div>
+      <p class="note">El token se guarda solo en este dispositivo (almacenamiento local del navegador) y se envía únicamente a GitHub. Usa un token limitado a un repositorio privado con permiso Contents: Read and write.</p>
+    </details>
+  </section>
+
+  <section class="card">
+    <div class="drop">
+      <p>Elige fotos, videos o documentos</p>
+      <input id="picker" type="file" multiple>
+      <button id="pickBtn" type="button">Seleccionar archivos</button>
+    </div>
+    <ul id="list" aria-live="polite"></ul>
+    <div class="btns two hidden" id="actions">
+      <button id="uploadBtn" type="button">Subir</button>
+      <button id="clearBtn" type="button" class="secondary">Limpiar lista</button>
+    </div>
+    <p class="note">Fotos y documentos de hasta 25 MB van al repositorio. Los videos y cualquier archivo mayor van como adjunto del release.</p>
+  </section>
+
+  <p class="note hidden" id="installTip">Para instalarla en iPhone: botón Compartir de Safari → «Añadir a pantalla de inicio».</p>
+</main>
+<script src="./app.js"></script>
+</body>
+</html>

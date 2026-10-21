@@ -1,0 +1,291 @@
+"use strict";
+
+const KEY = "subir-github.v1";
+const REPO_LIMIT = 25 * 1024 * 1024; // más que esto va al release
+const DEFAULTS = { user: "", repo: "", branch: "main", folder: "subidas", tag: "media", token: "" };
+
+/* ---------- utilidades puras (se prueban con node) ---------- */
+
+function pad(n) { return String(n).padStart(2, "0"); }
+
+function stamp(d = new Date()) {
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function safeName(name) {
+  const cleaned = String(name)
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return cleaned || "archivo";
+}
+
+function uniqueName(fileName, index, d = new Date(), rand = Math.random().toString(36).slice(2, 5)) {
+  return `${stamp(d)}-${index + 1}${rand}-${safeName(fileName)}`;
+}
+
+function goesToRelease(file) {
+  const isVideo = (file.type || "").startsWith("video/") || /\.(mp4|mov|m4v|avi|mkv|webm)$/i.test(file.name || "");
+  return isVideo || file.size > REPO_LIMIT;
+}
+
+function repoPath(folder, name) {
+  return String(folder || "")
+    .split("/").filter(Boolean)
+    .concat(name)
+    .map(encodeURIComponent)
+    .join("/");
+}
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
+  if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
+}
+
+/* ---------- API de GitHub ---------- */
+
+async function gh(cfg, path, opts = {}) {
+  return fetch("https://api.github.com" + path, {
+    ...opts,
+    headers: {
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      Authorization: "Bearer " + cfg.token,
+      ...(opts.headers || {}),
+    },
+  });
+}
+
+async function errText(r) {
+  try {
+    const j = await r.json();
+    return `${r.status}: ${j.message || "error"}`;
+  } catch {
+    return String(r.status);
+  }
+}
+
+function toBase64(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      const s = String(fr.result);
+      resolve(s.slice(s.indexOf(",") + 1));
+    };
+    fr.onerror = () => reject(fr.error || new Error("No se pudo leer el archivo"));
+    fr.readAsDataURL(file);
+  });
+}
+
+async function putToRepo(cfg, file, name, onProgress) {
+  onProgress(0.1);
+  const content = await toBase64(file);
+  onProgress(0.4);
+  const body = { message: "Subir " + name, content };
+  if (cfg.branch) body.branch = cfg.branch;
+  const r = await gh(cfg, `/repos/${encodeURIComponent(cfg.user)}/${encodeURIComponent(cfg.repo)}/contents/${repoPath(cfg.folder, name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(await errText(r));
+  const j = await r.json();
+  onProgress(1);
+  return j.content && j.content.html_url ? j.content.html_url : "";
+}
+
+let releaseCache = null;
+
+async function getRelease(cfg) {
+  const key = `${cfg.user}/${cfg.repo}#${cfg.tag}`;
+  if (releaseCache && releaseCache.key === key) return releaseCache.rel;
+  const base = `/repos/${encodeURIComponent(cfg.user)}/${encodeURIComponent(cfg.repo)}/releases`;
+  let r = await gh(cfg, `${base}/tags/${encodeURIComponent(cfg.tag)}`);
+  if (r.status === 404) {
+    r = await gh(cfg, base, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tag_name: cfg.tag, name: cfg.tag, body: "Archivos subidos desde la app.", draft: false, prerelease: false }),
+    });
+  }
+  if (!r.ok) throw new Error(await errText(r));
+  const rel = await r.json();
+  releaseCache = { key, rel };
+  return rel;
+}
+
+function uploadAsset(cfg, rel, file, name, onProgress) {
+  return new Promise((resolve, reject) => {
+    const base = String(rel.upload_url).replace(/\{.*$/, "");
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${base}?name=${encodeURIComponent(name)}`);
+    xhr.setRequestHeader("Authorization", "Bearer " + cfg.token);
+    xhr.setRequestHeader("Accept", "application/vnd.github+json");
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText).browser_download_url || ""); } catch { resolve(""); }
+      } else {
+        let m = String(xhr.status);
+        try { m += ": " + JSON.parse(xhr.responseText).message; } catch {}
+        reject(new Error(m));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Error de red al subir"));
+    xhr.send(file);
+  });
+}
+
+/* ---------- interfaz ---------- */
+
+if (typeof document !== "undefined") {
+  const $ = (s) => document.querySelector(s);
+  const ids = ["user", "repo", "branch", "folder", "tag", "token"];
+  let items = []; // { file, name, thumb, state, el }
+  let busy = false;
+
+  function loadCfg() {
+    try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || "{}") }; }
+    catch { return { ...DEFAULTS }; }
+  }
+  function saveCfg(c) { try { localStorage.setItem(KEY, JSON.stringify(c)); } catch {} }
+  function readForm() {
+    const c = {};
+    ids.forEach((id) => { c[id] = $("#" + id).value.trim(); });
+    return c;
+  }
+  function fillForm(c) { ids.forEach((id) => { $("#" + id).value = c[id] || ""; }); }
+  function say(text, kind) { const m = $("#msg"); m.textContent = text; m.className = kind || ""; }
+  function needsConfig(c) { return !c.user || !c.repo || !c.token; }
+
+  function render() {
+    const ul = $("#list");
+    ul.textContent = "";
+    items.forEach((it) => {
+      const li = document.createElement("li");
+      li.className = "item";
+      const th = document.createElement("div");
+      th.className = "thumb";
+      if (it.file.type.startsWith("image/")) {
+        const img = document.createElement("img");
+        it.thumb = it.thumb || URL.createObjectURL(it.file);
+        img.src = it.thumb; img.alt = "";
+        th.appendChild(img);
+      } else {
+        th.textContent = it.file.type.startsWith("video/") ? "🎬" : "📄";
+      }
+      const info = document.createElement("div");
+      const nm = document.createElement("div"); nm.className = "name"; nm.textContent = it.file.name;
+      const mt = document.createElement("div"); mt.className = "meta";
+      mt.textContent = `${fmtSize(it.file.size)} · ${goesToRelease(it.file) ? "Release" : "Repositorio"}`;
+      const bar = document.createElement("div"); bar.className = "bar";
+      const fill = document.createElement("i"); fill.style.width = (it.progress || 0) * 100 + "%";
+      bar.appendChild(fill);
+      const st = document.createElement("div"); st.className = "status " + (it.cls || "");
+      if (it.link) {
+        const a = document.createElement("a");
+        a.href = it.link; a.target = "_blank"; a.rel = "noopener";
+        a.textContent = it.status || "Subido";
+        st.appendChild(a);
+      } else {
+        st.textContent = it.status || "";
+      }
+      info.append(nm, mt, bar, st);
+      li.append(th, info);
+      ul.appendChild(li);
+      it.fillEl = fill;
+    });
+    $("#actions").classList.toggle("hidden", items.length === 0);
+    $("#uploadBtn").disabled = busy || !items.some((i) => i.state !== "ok");
+    $("#clearBtn").disabled = busy;
+  }
+
+  function setProgress(it, p) {
+    it.progress = p;
+    if (it.fillEl) it.fillEl.style.width = p * 100 + "%";
+  }
+
+  async function uploadAll() {
+    const cfg = readForm();
+    if (needsConfig(cfg)) {
+      $("#settings").open = true;
+      say("Completa usuario, repositorio y token.", "err");
+      return;
+    }
+    saveCfg(cfg);
+    busy = true; render();
+    let n = 0;
+    for (const it of items) {
+      if (it.state === "ok") continue;
+      n += 1;
+      it.state = "up"; it.status = "Subiendo…"; it.cls = ""; setProgress(it, 0.02);
+      render();
+      const name = uniqueName(it.file.name, n - 1);
+      try {
+        if (goesToRelease(it.file)) {
+          const rel = await getRelease(cfg);
+          it.link = await uploadAsset(cfg, rel, it.file, name, (p) => setProgress(it, p));
+        } else {
+          it.link = await putToRepo(cfg, it.file, name, (p) => setProgress(it, p));
+        }
+        it.state = "ok"; it.status = "Subido ✓"; it.cls = "ok"; setProgress(it, 1);
+      } catch (e) {
+        it.state = "err"; it.status = "Falló: " + (e && e.message ? e.message : e); it.cls = "err"; setProgress(it, 0);
+      }
+      render();
+    }
+    busy = false; render();
+  }
+
+  async function testConn() {
+    const cfg = readForm();
+    if (needsConfig(cfg)) { say("Completa usuario, repositorio y token.", "err"); return; }
+    say("Probando…");
+    try {
+      const r = await gh(cfg, `/repos/${encodeURIComponent(cfg.user)}/${encodeURIComponent(cfg.repo)}`);
+      if (!r.ok) { say("No se pudo acceder: " + (await errText(r)), "err"); return; }
+      const j = await r.json();
+      const canPush = j.permissions && j.permissions.push;
+      say(canPush ? `Conectado a ${j.full_name} (${j.private ? "privado" : "público"}) ✓` : "Conectado, pero el token no tiene permiso de escritura.", canPush ? "ok" : "err");
+    } catch (e) {
+      say("Error de red: " + (e && e.message ? e.message : e), "err");
+    }
+  }
+
+  $("#pickBtn").addEventListener("click", () => $("#picker").click());
+  $("#picker").addEventListener("change", (e) => {
+    Array.from(e.target.files).forEach((file) => items.push({ file, state: "new", progress: 0 }));
+    e.target.value = "";
+    render();
+  });
+  $("#uploadBtn").addEventListener("click", uploadAll);
+  $("#clearBtn").addEventListener("click", () => {
+    items.forEach((i) => { if (i.thumb) URL.revokeObjectURL(i.thumb); });
+    items = []; render();
+  });
+  $("#saveBtn").addEventListener("click", () => {
+    const c = readForm();
+    saveCfg(c);
+    say("Configuración guardada.", "ok");
+  });
+  $("#testBtn").addEventListener("click", testConn);
+
+  const cfg0 = loadCfg();
+  fillForm(cfg0);
+  if (needsConfig(cfg0)) $("#settings").open = true;
+  render();
+
+  const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  if (!standalone) $("#installTip").classList.remove("hidden");
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  }
+}
+
+if (typeof module !== "undefined") {
+  module.exports = { stamp, safeName, uniqueName, goesToRelease, repoPath, fmtSize, REPO_LIMIT };
+}
