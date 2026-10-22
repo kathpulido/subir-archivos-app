@@ -25,9 +25,23 @@ Usa "Probar conexión" para comprobar que el token funciona y tiene permiso de e
 Todo se guarda en el repositorio, ordenado por tipo y mes, con un commit por archivo:
 `fotos/2026-10/…`, `videos/2026-10/…`, `audios/2026-10/…` y `documentos/2026-10/…`.
 
-Límite: 50 MB por archivo. Los archivos más pesados se marcan en la lista y no se suben.
+### Archivos grandes: se dividen en partes
+
+- Hasta 15 MB: se suben directo.
+- Más de 15 MB (hasta 500 MB): se dividen en partes de 10 MB dentro de una carpeta
+  `<nombre>.partes/` con `parte001`, `parte002`, … más dos archivos de ayuda:
+  - `LEEME-UNIR.txt`: los comandos exactos para unir las partes (Windows, Mac y Linux).
+  - `manifest.json`: el índice que usa la app para unirlas sola.
+- Si una subida se corta, al pulsar **Subir** de nuevo continúa desde la parte donde quedó.
+
+Para recuperar el archivo completo:
+- **Con la app:** sección «Archivos divididos» → Buscar → Descargar (mejor desde un computador).
+- **Con comandos:** descarga todas las partes en una carpeta y ejecuta, dentro de ella,
+  Windows (cmd): `copy /b parte* "archivo.pdf"`; Mac o Linux: `cat parte* > "archivo.pdf"`.
+  El comando con el nombre real del archivo está en `LEEME-UNIR.txt`.
+
+Un repositorio con muchos archivos pesados crece rápido; GitHub recomienda mantenerlo por debajo de 1 GB.
 (Las subidas por el sistema de Releases de GitHub no funcionan desde el navegador, por eso no se usan.)
-Un repositorio con muchos videos crece rápido; GitHub recomienda mantenerlo por debajo de 1 GB.
 
 Cada archivo se renombra con fecha y hora para evitar choques de nombre.
 

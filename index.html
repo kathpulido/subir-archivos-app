@@ -65,8 +65,10 @@
   .status.ok { color: var(--ok); } .status.err { color: var(--err); }
   .status a { color: inherit; }
   .note { font-size: .8rem; color: var(--muted); margin-top: 10px; }
-  #msg { font-size: .9rem; margin-top: 10px; min-height: 1.2em; }
-  #msg.ok { color: var(--ok); } #msg.err { color: var(--err); }
+  #msg, #splitMsg { font-size: .9rem; margin-top: 10px; min-height: 1.2em; }
+  #msg.ok, #splitMsg.ok { color: var(--ok); } #msg.err, #splitMsg.err { color: var(--err); }
+  li.split { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+  li.split button { width: auto; padding: 8px 12px; }
   .hidden { display: none; }
 </style>
 </head>
@@ -108,7 +110,17 @@
       <button id="uploadBtn" type="button">Subir</button>
       <button id="clearBtn" type="button" class="secondary">Limpiar lista</button>
     </div>
-    <p class="note">Todo se guarda en el repositorio, ordenado en carpetas por tipo y mes (fotos, videos, audios, documentos). Límite: 50 MB por archivo. Mantén la app abierta mientras sube.</p>
+    <p class="note">Todo se guarda en el repositorio, ordenado en carpetas por tipo y mes (fotos, videos, audios, documentos). Los archivos de más de 15 MB se dividen en partes de 10 MB, con un archivo LEEME-UNIR.txt que explica cómo unirlas. Límite: 500 MB por archivo. Mantén la app abierta y la pantalla encendida mientras sube.</p>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Archivos divididos</summary>
+      <p class="note" style="margin-top:10px">Busca los archivos que se subieron en partes y descárgalos ya unidos. Funciona mejor desde un computador.</p>
+      <div class="btns"><button id="findSplitBtn" type="button" class="secondary">Buscar archivos divididos</button></div>
+      <div id="splitMsg" role="status"></div>
+      <ul id="splitList"></ul>
+    </details>
   </section>
 
   <p class="note hidden" id="installTip">Para instalarla en iPhone: botón Compartir de Safari → «Añadir a pantalla de inicio».</p>
